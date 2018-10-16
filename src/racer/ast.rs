@@ -725,6 +725,7 @@ impl<'c, 's, 'ast> visit::Visitor<'ast> for ExprTypeVisitor<'c, 's> {
                 self.visit_expr(subexpression);
                 self.result = self.result.take().and_then(|structm| match structm {
                     Ty::Match(structm) => {
+                        debug!("match struct: {:?}", structm);
                         typeinf::get_struct_field_type(&fieldname, &structm, self.session).and_then(
                             |fieldtypepath| {
                                 find_type_match_including_generics(
@@ -925,10 +926,12 @@ impl<'ast> visit::Visitor<'ast> for StructVisitor {
         &mut self,
         struct_definition: &ast::VariantData,
         _: ast::Ident,
-        _: &ast::Generics,
+        generics: &ast::Generics,
         _: ast::NodeId,
         _: Span,
     ) {
+        let args = GenericsArgs::from_generics(&generics, &self.scope.filepath, generics.span.lo().0 as i32);
+        debug!("args: {:?}", args);
         for field in struct_definition.fields() {
             let source_map::BytePos(point) = field.span.lo();
 
@@ -938,9 +941,23 @@ impl<'ast> visit::Visitor<'ast> for StructVisitor {
                 // name unnamed field by its ordinal, since self.0 works
                 None => format!("{}", self.fields.len()),
             };
+            debug!("field type: {:?}", ty);
+            let ty = if let Some(Ty::PathSearch(ps)) = ty {
+                ast_types::get_match_from_args(&ps.path.segments[0].name, &args)
+                    .or_else(|| Some(Ty::PathSearch(ps)))
+                    .and_then(|mut ty| match ty {
+                        Ty::PathSearch(ref mut ps) => {
+                            ast_types::replace_with_bounds(ps, &args);
+                            Some(ty)
+                        }
+                        ty => Some(ty)
+                    })
+            } else { None };
+            debug!("after field type: {:?}", ty);
 
             self.fields.push((name, point.into(), ty));
         }
+        debug!("fields: {:?}", self.fields);
     }
 }
 
@@ -1358,7 +1375,19 @@ impl<'c, 's, 'ast> visit::Visitor<'ast> for FnArgTypeVisitor<'c, 's> {
                         }
                     }
                     find_type_match(&paths.path, &paths.filepath, paths.point, self.session)
-                        .map(Ty::Match)
+                        .and_then(|mut m| {
+                            if let MatchType::Struct(ref mut generics_args) = m.mtype {
+                                generics_args.args_mut()
+                                    .for_each(|type_param| {
+                                        let name = &type_param.name;
+                                        if let Some(tp) = self.generics.find_type_param(name) {
+                                            type_param.add_bound(tp.bounds.clone());
+                                        }
+                                    });
+                            }
+                            Some(m)
+                        }).map(Ty::Match)
+
                 } else {
                     Some(ty)
                 }

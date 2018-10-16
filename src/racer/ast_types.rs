@@ -647,7 +647,7 @@ impl TraitBounds {
             .collect();
         TraitBounds(vec)
     }
-    fn extend(&mut self, other: Self) {
+    pub(crate) fn extend(&mut self, other: Self) {
         self.0.extend(other.0)
     }
     fn paths(&self) -> impl Iterator<Item = &Path> {
@@ -712,6 +712,43 @@ impl TypeParameter {
     }
 }
 
+pub(crate) fn replace_with_bounds(ps: &mut PathSearch, args: &GenericsArgs) {
+    ps.path.segments.iter_mut().for_each(|segment| {
+        segment
+            .generics
+            .iter_mut()
+            .for_each(|generic| match generic {
+                &mut Ty::PathSearch(ref mut ps) if ps.path.is_single() => {
+                    if let Some(ty) =
+                        get_match_from_args(&ps.path.segments[0].name, args)
+                    {
+                        *generic = ty;
+                    } else {
+                        replace_with_bounds(ps, args);
+                    }
+                }
+                _ => {}
+            })
+    })
+}
+
+pub(crate) fn get_match_from_args(name: &str, args: &GenericsArgs) -> Option<Ty> {
+    args.search_param_by_name(name).and_then(|(_, tp)| {
+        let m = Match {
+            matchstr: tp.name.clone(),
+            mtype: MatchType::TypeParameter(Box::new(tp.bounds.clone())),
+            contextstr: String::new(),
+            filepath: tp.filepath.clone(),
+            coords: None,
+            local: false,
+            point: tp.point,
+            docs: String::new(),
+        };
+        Some(Ty::Match(m))
+    })
+}
+
+
 /// List of Args in generics, e.g. <T: Clone, U, P>
 /// Now it's intended to use only for type parameters
 // TODO: should we extend this type enable to handle both type parameters and true types?
@@ -719,11 +756,18 @@ impl TypeParameter {
 pub struct GenericsArgs(pub Vec<TypeParameter>);
 
 impl GenericsArgs {
+    #[allow(dead_code)]
     pub(crate) fn find_type_param(&self, name: &str) -> Option<&TypeParameter> {
         self.0.iter().find(|v| &v.name == name)
     }
     pub(crate) fn extend(&mut self, other: GenericsArgs) {
         self.0.extend(other.0);
+    }
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub(crate) fn get(&self, i: usize) -> &TypeParameter {
+        &self.0[i]
     }
     pub(crate) fn from_generics<'a, P: AsRef<FilePath>>(
         generics: &'a ast::Generics,
@@ -788,42 +832,6 @@ impl GenericsArgs {
             tp: &mut TypeParameter,
             args: &GenericsArgs,
         ) {
-            fn get_match_from_args(name: &str, args: &GenericsArgs) -> Option<Ty> {
-                args.search_param_by_name(name).and_then(|(_, tp)| {
-                    let m = Match {
-                        matchstr: tp.name.clone(),
-                        mtype: MatchType::TypeParameter(Box::new(tp.bounds.clone())),
-                        contextstr: String::new(),
-                        filepath: tp.filepath.clone(),
-                        coords: None,
-                        local: false,
-                        point: tp.point,
-                        docs: String::new(),
-                    };
-                    Some(Ty::Match(m))
-                })
-            };
-
-            fn replace_with_bounds(ps: &mut PathSearch, args: &GenericsArgs) {
-                ps.path.segments.iter_mut().for_each(|segment| {
-                    segment
-                        .generics
-                        .iter_mut()
-                        .for_each(|generic| match generic {
-                            &mut Ty::PathSearch(ref mut ps) => {
-                                if let Some(ty) =
-                                    get_match_from_args(&ps.path.segments[0].name, args)
-                                {
-                                    *generic = ty;
-                                } else {
-                                    replace_with_bounds(ps, args);
-                                }
-                            }
-                            _ => {}
-                        })
-                })
-            }
-
             if let Some(ps) = tp.bounds.get_closure_mut() {
                 for segment in ps.path.segments.iter_mut() {
                     segment.output = segment.output.take().and_then(|ty| match ty {

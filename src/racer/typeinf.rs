@@ -408,11 +408,28 @@ pub fn get_struct_field_type(
         (*get_first_stmt(src.as_src().shift_start(opoint))).to_owned()
     };
     let fields = ast::parse_struct_fields(structsrc.to_owned(), Scope::from_match(structmatch));
+    let mut generic_count = 0;
     for (field, _, ty) in fields {
+        if let Some(Ty::Match(..)) = ty {
+            generic_count += 1;
+        }
         if fieldname != field {
             continue;
         }
-        return ty;
+        return ty.and_then(|ty| match ty {
+            Ty::Match(mut m) => {
+                if let MatchType::TypeParameter(ref mut bounds) = m.mtype {
+                    if let MatchType::Struct(ref gen_args) = structmatch.mtype {
+                        if generic_count <= gen_args.len() {
+                            let type_param = gen_args.get(generic_count - 1);
+                            bounds.extend(type_param.bounds.clone());
+                        }
+                    }
+                }
+                Some(Ty::Match(m))
+            }
+            ty => Some(ty)
+        })
     }
     None
 }
