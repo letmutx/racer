@@ -410,8 +410,10 @@ pub fn get_struct_field_type(
     let fields = ast::parse_struct_fields(structsrc.to_owned(), Scope::from_match(structmatch));
     let mut generic_count = 0;
     for (field, _, ty) in fields {
-        if let Some(Ty::Match(..)) = ty {
-            generic_count += 1;
+        if let Some(Ty::Match(Match { ref mtype, .. })) = ty {
+            if let MatchType::TypeParameter(..) = mtype {
+                generic_count += 1;
+            }
         }
         if fieldname != field {
             continue;
